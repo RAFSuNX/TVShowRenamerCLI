@@ -90,22 +90,26 @@ detect_existing_seasons() {
 detect_episode_number() {
     local filename="$1"
     local numbers=()
+    
+    # First check for E/Ep/Episode patterns
+    ep_pattern=$(echo "$filename" | grep -oEi '(episode[ ._-]?|e[ ._-]?)([0-9]+)' | grep -oE '[0-9]+' | tail -1)
+    
+    # If no E-prefixed number found, look for standalone numbers
+    [ -z "$ep_pattern" ] && {
+        numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,}\b' | grep -vE '^0+$'))
+    }
 
-    # Extract all standalone numbers from filename
-    while IFS= read -r line; do
-        numbers+=("$line")
-    done < <(echo "$filename" | grep -oE '\b[0-9]+\b' | grep -vE '^0+$')
+    # Prioritize episode-prefixed numbers first
+    [ -n "$ep_pattern" ] && {
+        echo "$ep_pattern"
+        return
+    }
 
+    # Handle standalone numbers
     case ${#numbers[@]} in
-        0)
-            echo "0"
-            ;;
-        1)
-            echo "${numbers[0]}"
-            ;;
-        *)
-            echo "0"
-            ;;
+        0) echo "0" ;;
+        1) echo "${numbers[0]}" ;;
+        *) echo "0" ;;
     esac
 }
 
