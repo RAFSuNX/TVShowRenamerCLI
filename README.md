@@ -26,20 +26,20 @@ A robust bash script for organizing TV series files into season-based directory 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/tv-series-renamer.git
-cd tv-series-renamer
+git clone https://github.com/RAFSuNX/TVShowRenamerCLI.git
+cd TVShowRenamerCLI
 ```
 
 2. Make the script executable:
 ```bash
-chmod +x tvrenamer.sh
+chmod +x seriesrenamer.sh
 ```
 
 ## Usage
 
 ### Basic Command
 ```bash
-./tvrenamer.sh
+./seriesrenamer.sh
 ```
 
 ### Options
@@ -53,14 +53,14 @@ chmod +x tvrenamer.sh
 
 1. Run the script:
 ```bash
-./tvrenamer.sh
+./seriesrenamer.sh
 ```
 
 2. Follow prompts:
 ```
 TV Series Organizer (Custom Season Parts)
 -----------------------------------------
-Enter series folder path: /path/to/your/files
+Enter series folder path: /path/to/your/series/folder
 Enter series title: Your Series Name
 Dual Audio? (y/n): y
 Enter main season number: 2
