@@ -8,6 +8,42 @@ AUTO_YES=0
 declare -A RENAME_MAP
 SEASON_PATTERN="season([0-9]+)"
 
+# --- Dependencies Check ---
+verify_dependencies() {
+    local missing=()
+    
+    # Check for ffprobe (part of ffmpeg)
+    if ! command -v ffprobe &>/dev/null; then
+        missing+=("ffmpeg")
+    fi
+    
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        missing+=("jq")
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Missing required dependencies:"
+        for dep in "${missing[@]}"; do
+            case $dep in
+                "ffmpeg")
+                    echo "- ffmpeg (required for media analysis)"
+                    echo "  Install with:"
+                    echo "  Ubuntu/Debian: sudo apt install ffmpeg"
+                    echo "  macOS:         brew install ffmpeg"
+                    ;;
+                "jq")
+                    echo "- jq (required for JSON parsing)"
+                    echo "  Install with:"
+                    echo "  Ubuntu/Debian: sudo apt install jq"
+                    echo "  macOS:         brew install jq"
+                    ;;
+            esac
+        done
+        exit 1
+    fi
+}
+
 # --- Load Configuration ---
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 
@@ -113,6 +149,39 @@ detect_episode_number() {
     esac
 }
 
+get_media_info() {
+    local file="$1"
+    local json_data=$(ffprobe -v quiet -print_format json -show_streams "$file" 2>/dev/null)
+    
+    # Detect resolution
+    local height=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .height')
+    
+    # Standard resolutions
+    if [[ $height -ge 4320 ]]; then
+        resolution="8K"
+    elif [[ $height -ge 2160 ]]; then
+        resolution="4K"
+    elif [[ $height -ge 1080 ]]; then
+        resolution="1080p"
+    elif [[ $height -ge 720 ]]; then
+        resolution="720p"
+    else
+        # For non-standard resolutions below 720, use height value with 'p'
+        resolution="${height}p"
+    fi
+
+    # Detect codec
+    local codec=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .codec_name')
+    case $codec in
+        "hevc") codec="H.265" ;;
+        "h264") codec="H.264" ;;
+        "av1")  codec="AV1" ;;
+        *)      codec=$(echo "$codec" | tr '[:lower:]' '[:upper:]') ;;
+    esac
+
+    echo "${resolution}:${codec}"
+}
+
 get_last_episode() {
     local target_dir="$1"
     find "$target_dir" -maxdepth 1 -type f -iname "*_S??E??*" -printf "%f\n" |
@@ -134,8 +203,9 @@ show_summary() {
 }
 
 # --- Main Script ---
-echo "📺 TV Show Renamer CLI"
-echo "──────────────────────────────────────────"
+verify_dependencies
+echo "📺 TV Show Renamer (Media-Aware)"
+echo "──────────────────────────────────────"
 
 # Get inputs
 read -p "📂 Enter series folder path: " SERIES_FOLDER
@@ -200,10 +270,13 @@ for file in "${files[@]}"; do
     EPISODE_COUNTER=$((10#$episode + 1))
     episode_padded=$(printf "%02d" "$((10#$episode))")
 
-    # Build new filename
+    # Get media technical specs
+    IFS=":" read media_resolution media_codec <<< "$(get_media_info "$file")"
+
+    # Build new filename with detected specs
     new_name="${SERIES_TITLE}_S${season_padded}E${episode_padded}"
     [ "$dual_audio" == "y" ] && new_name+="_Dual"
-    new_name+="_1080p_H.265.${file##*.}"
+    new_name+="_${media_resolution}_${media_codec}.${file##*.}"
 
     # Store in rename map
     RENAME_MAP["$file"]="${TARGET_DIR}/${new_name}"
