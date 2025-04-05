@@ -153,20 +153,21 @@ get_media_info() {
     local file="$1"
     local json_data=$(ffprobe -v quiet -print_format json -show_streams "$file" 2>/dev/null)
     
-    # Detect resolution
+    # Get actual dimensions
+    local width=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .width')
     local height=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .height')
     
-    # Standard resolutions
-    if [[ $height -ge 4320 ]]; then
+    # Standard resolution recognition
+    if [[ $width -eq 7680 && $height -eq 4320 ]]; then
         resolution="8K"
-    elif [[ $height -ge 2160 ]]; then
+    elif [[ $width -eq 3840 && $height -eq 2160 ]]; then
         resolution="4K"
-    elif [[ $height -ge 1080 ]]; then
+    elif [[ $width -eq 1920 && $height -eq 1080 ]]; then
         resolution="1080p"
-    elif [[ $height -ge 720 ]]; then
+    elif [[ $width -eq 1280 && $height -eq 720 ]]; then
         resolution="720p"
     else
-        # For non-standard resolutions below 720, use height value with 'p'
+        # For non-standard resolutions, use actual height
         resolution="${height}p"
     fi
 
