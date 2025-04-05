@@ -6,18 +6,17 @@ LOG_FILE="tv_rename_$(date +%Y%m%d_%H%M%S).log"
 DRY_RUN=0
 AUTO_YES=0
 declare -A RENAME_MAP
+declare -A EPISODE_TRACKER
 SEASON_PATTERN="season([0-9]+)"
 
-# --- Dependencies Check ---
+# --- Dependency Check ---
 verify_dependencies() {
     local missing=()
     
-    # Check for ffprobe (part of ffmpeg)
     if ! command -v ffprobe &>/dev/null; then
         missing+=("ffmpeg")
     fi
     
-    # Check for jq
     if ! command -v jq &>/dev/null; then
         missing+=("jq")
     fi
@@ -67,7 +66,7 @@ highlight_summary_entry() {
     local length1=${#original}
     local length2=${#new}
     local max_length=$(( length1 > length2 ? length1 : length2 ))
-    max_length=$(( max_length + 10 ))  # Account for prefix text
+    max_length=$(( max_length + 10 ))
     local separator=$(printf '%*s' "$max_length" | tr ' ' '-')
 
     echo
@@ -87,26 +86,33 @@ validate_number() {
     local var_name="$1"
     local prompt="$2"
     local default="$3"
+    local original_file="$4"
 
     while true; do
         read -p "$prompt ${default:+[default: $default]} : " input
-        cleaned=$(echo "$input" | tr -cd '0-9')
         
-        # Fix for leading zeros
-        if [[ "$cleaned" =~ ^0+([1-9]+) ]]; then
-            cleaned="${BASH_REMATCH[1]}"
-        elif [[ "$cleaned" == "0" ]]; then
-            cleaned="0"
-        fi
+        # Clean input: remove all non-digits and leading zeros
+        cleaned=$(echo "$input" | sed 's/^0*//' | tr -cd '0-9')
 
-        if [[ -z "$cleaned" && -n "$default" ]]; then
-            eval "$var_name=$default"
-            return 0
-        elif [[ -n "$cleaned" && "$cleaned" =~ ^[0-9]+$ ]]; then
+        # Handle empty input
+        [ -z "$cleaned" ] && cleaned="$default"
+
+        # Validate numeric value
+        if [[ "$cleaned" =~ ^[0-9]+$ ]]; then
+            # Check for duplicates
+            if [[ -n "${EPISODE_TRACKER[$cleaned]}" && "${EPISODE_TRACKER[$cleaned]}" != "$original_file" ]]; then
+                echo "⚠️  Episode $cleaned already used for:"
+                echo "    ${EPISODE_TRACKER[$cleaned]}"
+                read -p "❓ Use this number anyway? (y/n) [n]: " confirm
+                [[ "$confirm" =~ [yY] ]] || continue
+            fi
+
+            EPISODE_TRACKER[$cleaned]="$original_file"
             eval "$var_name=$cleaned"
             return 0
+        else
+            echo "❌ Invalid number! Please try again"
         fi
-        echo "❌ Invalid number! Please try again"
     done
 }
 
@@ -127,24 +133,22 @@ detect_episode_number() {
     local filename="$1"
     local numbers=()
     
-    # First check for E/Ep/Episode patterns
+    # Check episode patterns
     ep_pattern=$(echo "$filename" | grep -oEi '(episode[ ._-]?|e[ ._-]?)([0-9]+)' | grep -oE '[0-9]+' | tail -1)
     
-    # If no E-prefixed number found, look for standalone numbers
     [ -z "$ep_pattern" ] && {
-        numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,}\b' | grep -vE '^0+$'))
+        numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,}\b' | grep -vE '^0+'))
     }
 
-    # Prioritize episode-prefixed numbers first
     [ -n "$ep_pattern" ] && {
-        echo "$ep_pattern"
+        # Clean detected episode number
+        echo $(echo "$ep_pattern" | sed 's/^0*//')
         return
     }
 
-    # Handle standalone numbers
     case ${#numbers[@]} in
         0) echo "0" ;;
-        1) echo "${numbers[0]}" ;;
+        1) echo $(echo "${numbers[0]}" | sed 's/^0*//') ;;
         *) echo "0" ;;
     esac
 }
@@ -153,11 +157,13 @@ get_media_info() {
     local file="$1"
     local json_data=$(ffprobe -v quiet -print_format json -show_streams "$file" 2>/dev/null)
     
-    # Get actual dimensions
-    local width=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .width')
-    local height=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .height')
-    
-    # Standard resolution recognition
+    # Get video stream info
+    local width=$(echo "$json_data" | jq -r '[.streams[] | select(.codec_type=="video")][0] | .width')
+    local height=$(echo "$json_data" | jq -r '[.streams[] | select(.codec_type=="video")][0] | .height')
+    width=${width:-0}
+    height=${height:-0}
+
+    # Determine resolution
     if [[ $width -eq 7680 && $height -eq 4320 ]]; then
         resolution="8K"
     elif [[ $width -eq 3840 && $height -eq 2160 ]]; then
@@ -167,18 +173,18 @@ get_media_info() {
     elif [[ $width -eq 1280 && $height -eq 720 ]]; then
         resolution="720p"
     else
-        # For non-standard resolutions, use actual height
         resolution="${height}p"
     fi
 
     # Detect codec
-    local codec=$(echo "$json_data" | jq -r '.streams[] | select(.codec_type=="video") | .codec_name')
-    case $codec in
+    local codec=$(echo "$json_data" | jq -r '[.streams[] | select(.codec_type=="video")][0] | .codec_name')
+    case "$codec" in
         "hevc") codec="H.265" ;;
         "h264") codec="H.264" ;;
         "av1")  codec="AV1" ;;
         *)      codec=$(echo "$codec" | tr '[:lower:]' '[:upper:]') ;;
     esac
+    codec=${codec:-UNKNOWN}
 
     echo "${resolution}:${codec}"
 }
@@ -205,15 +211,15 @@ show_summary() {
 
 # --- Main Script ---
 verify_dependencies
-echo "📺 TV Show Renamer (Media-Aware)"
-echo "──────────────────────────────────────"
+echo "TV Series Organizer (Professional Edition)"
+echo "─────────────────────────────────────────"
 
-# Get inputs
+# User inputs
 read -p "📂 Enter series folder path: " SERIES_FOLDER
-SERIES_FOLDER="${SERIES_FOLDER%/}"
+SERIES_FOLDER=$(realpath "${SERIES_FOLDER%/}")
 [ ! -d "$SERIES_FOLDER" ] && { log "❌ Directory does not exist!"; exit 1; }
 
-# Detect existing seasons
+# Existing seasons detection
 EXISTING_SEASONS=($(detect_existing_seasons))
 [ ${#EXISTING_SEASONS[@]} -gt 0 ] &&
     echo "🔍 Found existing seasons: ${EXISTING_SEASONS[*]}"
@@ -226,14 +232,14 @@ read -p "🔊 Dual Audio? (y/n): " dual_audio
 dual_audio=${dual_audio,,}
 
 # Season selection
-validate_number season "➤ Enter main season number" "${EXISTING_SEASONS[0]}"
+validate_number season "➤ Enter main season number" "${EXISTING_SEASONS[0]}" "season_select"
 season_padded=$(printf "%02d" "$season")
 
-# Custom season part selection
-read -p "➤ Enter season part/subfolder (e.g., part01, finals, leave empty if none): " SEASON_PART
+# Season part configuration
+read -p "➤ Enter season part/subfolder (optional): " SEASON_PART
 SEASON_PART=$(sanitize_dir "$SEASON_PART")
 
-# Build target directory
+# Target directory setup
 TARGET_DIR="${SERIES_FOLDER}/season${season_padded}"
 [ -n "$SEASON_PART" ] && TARGET_DIR="${TARGET_DIR}/${SEASON_PART}"
 
@@ -241,19 +247,29 @@ TARGET_DIR="${SERIES_FOLDER}/season${season_padded}"
 if [ -d "$TARGET_DIR" ]; then
     LAST_EP=$(get_last_episode "$TARGET_DIR")
     if [ -n "$LAST_EP" ]; then
-        echo "⚠️  Directory already contains ${LAST_EP} episodes!"
-        read -p "Continue with existing directory? (y/n): " confirm
+        echo "⚠️  Directory contains ${LAST_EP} episodes!"
+        read -p "Continue? (y/n): " confirm
         [[ "$confirm" != "y" ]] && exit
     fi
 else
-    mkdir -p "$TARGET_DIR"
+    echo "Creating directory: $TARGET_DIR"
+    if ! mkdir -p "$TARGET_DIR"; then
+        log "❌ Failed to create directory: $TARGET_DIR"
+        exit 1
+    fi
     log "Created directory: $TARGET_DIR"
+    sleep 1
 fi
 
-# Set initial episode counter
+if [ ! -d "$TARGET_DIR" ]; then
+    log "❌ Target directory verification failed: $TARGET_DIR"
+    exit 1
+fi
+
+# Episode counter initialization
 EPISODE_COUNTER=$((10#${LAST_EP:-0} + 1))
 
-# Process only files in main directory
+# File processing
 mapfile -d $'\0' files < <(find "$SERIES_FOLDER" -maxdepth 1 -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.m4v" \) -print0)
 
 for file in "${files[@]}"; do
@@ -261,29 +277,45 @@ for file in "${files[@]}"; do
     filename=$(basename "$file")
     highlight_file "$filename"
 
-    # Auto-detect possible episode number
+    # Episode detection
     detected_ep=$(detect_episode_number "$filename")
     default_ep=$EPISODE_COUNTER
     [ "$detected_ep" -gt 0 ] && default_ep=$detected_ep
 
-    # Episode input with auto-increment and detection
-    validate_number episode "➤ Enter episode number (detected: ${detected_ep})" "$default_ep"
+    # Episode validation
+    validate_number episode "➤ Enter episode number (detected: ${detected_ep})" "$default_ep" "$filename"
     EPISODE_COUNTER=$((10#$episode + 1))
-    episode_padded=$(printf "%02d" "$((10#$episode))")
+    
+    # Smart episode formatting
+    decimal_episode=$((10#$episode))
+    if [[ $decimal_episode -lt 100 ]]; then
+        episode_padded=$(printf "%02d" "$decimal_episode")
+    else
+        episode_padded=$(printf "%03d" "$decimal_episode")
+    fi
 
-    # Get media technical specs
+    # Media analysis
     IFS=":" read media_resolution media_codec <<< "$(get_media_info "$file")"
 
-    # Build new filename with detected specs
+    # Filename construction
     new_name="${SERIES_TITLE}_S${season_padded}E${episode_padded}"
     [ "$dual_audio" == "y" ] && new_name+="_Dual"
-    new_name+="_${media_resolution}_${media_codec}.${file##*.}"
+    new_name+="_${media_resolution}_${media_codec}"
 
-    # Store in rename map
-    RENAME_MAP["$file"]="${TARGET_DIR}/${new_name}"
+    # Conflict resolution
+    version=1
+    while true; do
+        target_file="${TARGET_DIR}/${new_name}"
+        [ $version -gt 1 ] && target_file+="_v${version}"
+        target_file+=".${file##*.}"
+
+        [ -e "$target_file" ] && ((version++)) || break
+    done
+
+    RENAME_MAP["$file"]="$target_file"
 done
 
-# Show summary and confirm
+# Final confirmation
 show_summary
 
 [ $AUTO_YES -eq 0 ] && {
@@ -291,23 +323,23 @@ show_summary
     [[ ! "$confirm" =~ [yY] ]] && exit
 }
 
-# Execute renames
+# Execution phase
 for key in "${!RENAME_MAP[@]}"; do
     target="${RENAME_MAP[$key]}"
-
-    [ -e "$target" ] && {
-        log "⚠️  Skipping existing file: $(basename "$target")"
+    
+    if [ -e "$target" ]; then
+        log "⚠️  Conflict detected: Skipping $(basename "$target")"
         continue
-    }
+    fi
 
     if [ $DRY_RUN -eq 1 ]; then
-        log "Dry run: mv \"$(basename "$key")\" ➔ \"$(basename "$target")\""
+        log "Dry run: $(basename "$key") ➔ $(basename "$target")"
     else
         mv -v "$key" "$target" 2>&1 | tee -a "$LOG_FILE"
     fi
 done
 
-# Cleanup empty directories
+# Cleanup
 [ $DRY_RUN -eq 0 ] && find "$SERIES_FOLDER" -type d -empty -delete 2>/dev/null
 
 log "✅ Operation completed successfully"
