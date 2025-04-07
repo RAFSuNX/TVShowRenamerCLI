@@ -86,7 +86,7 @@ validate_number() {
     local var_name="$1"
     local prompt="$2"
     local default="$3"
-    local original_file="$4"
+    local original_file="$4"  # Now optional
 
     while true; do
         read -p "$prompt ${default:+[default: $default]} : " input
@@ -99,15 +99,17 @@ validate_number() {
 
         # Validate numeric value
         if [[ "$cleaned" =~ ^[0-9]+$ ]]; then
-            # Check for duplicates
-            if [[ -n "${EPISODE_TRACKER[$cleaned]}" && "${EPISODE_TRACKER[$cleaned]}" != "$original_file" ]]; then
-                echo "⚠️  Episode $cleaned already used for:"
-                echo "    ${EPISODE_TRACKER[$cleaned]}"
-                read -p "❓ Use this number anyway? (y/n) [n]: " confirm
-                [[ "$confirm" =~ [yY] ]] || continue
+            # Only track episodes, not seasons
+            if [[ -n "$original_file" && "$original_file" != "season_select" ]]; then
+                if [[ -n "${EPISODE_TRACKER[$cleaned]}" && "${EPISODE_TRACKER[$cleaned]}" != "$original_file" ]]; then
+                    echo "⚠️  Episode $cleaned already used for:"
+                    echo "    ${EPISODE_TRACKER[$cleaned]}"
+                    read -p "❓ Use this number anyway? (y/n) [n]: " confirm
+                    [[ "$confirm" =~ [yY] ]] || continue
+                fi
+                EPISODE_TRACKER[$cleaned]="$original_file"
             fi
-
-            EPISODE_TRACKER[$cleaned]="$original_file"
+            
             eval "$var_name=$cleaned"
             return 0
         else
@@ -115,7 +117,6 @@ validate_number() {
         fi
     done
 }
-
 sanitize_dir() {
     echo "$1" | tr ' ' '_' | sed -E 's/[^a-zA-Z0-9_/-]//g'
 }
@@ -232,7 +233,7 @@ read -p "🔊 Dual Audio? (y/n): " dual_audio
 dual_audio=${dual_audio,,}
 
 # Season selection
-validate_number season "➤ Enter main season number" "${EXISTING_SEASONS[0]}" "season_select"
+validate_number season "➤ Enter main season number" "${EXISTING_SEASONS[0]}"
 season_padded=$(printf "%02d" "$season")
 
 # Season part configuration
