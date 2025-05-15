@@ -130,29 +130,54 @@ detect_existing_seasons() {
     done | sort -n | uniq
 }
 
+# detect_episode_number() {
+#     local filename="$1"
+#     local numbers=()
+    
+#     # Check episode patterns
+#     ep_pattern=$(echo "$filename" | grep -oEi '(episode[ ._-]?|e[ ._-]?)([0-9]+)' | grep -oE '[0-9]+' | tail -1)
+    
+#     [ -z "$ep_pattern" ] && {
+#         numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,}\b' | grep -vE '^0+'))
+#     }
+
+#     [ -n "$ep_pattern" ] && {
+#         # Clean detected episode number
+#         echo $(echo "$ep_pattern" | sed 's/^0*//')
+#         return
+#     }
+
+#     case ${#numbers[@]} in
+#         0) echo "0" ;;
+#         1) echo $(echo "${numbers[0]}" | sed 's/^0*//') ;;
+#         *) echo "0" ;;
+#     esac
+# }
+
+
 detect_episode_number() {
     local filename="$1"
+    local ep_pattern=""
     local numbers=()
-    
-    # Check episode patterns
-    ep_pattern=$(echo "$filename" | grep -oEi '(episode[ ._-]?|e[ ._-]?)([0-9]+)' | grep -oE '[0-9]+' | tail -1)
-    
-    [ -z "$ep_pattern" ] && {
-        numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,}\b' | grep -vE '^0+'))
-    }
 
-    [ -n "$ep_pattern" ] && {
-        # Clean detected episode number
-        echo $(echo "$ep_pattern" | sed 's/^0*//')
+    # First: try to match explicit episode indicators like "e03", "episode_003"
+    ep_pattern=$(echo "$filename" | grep -oEi '(episode[ ._-]?|e[ ._-]?)([0-9]{1,3})' | grep -oE '[0-9]{1,3}' | tail -1)
+
+    if [ -n "$ep_pattern" ]; then
+        echo "$ep_pattern" | sed 's/^0*//'
         return
-    }
+    fi
 
-    case ${#numbers[@]} in
-        0) echo "0" ;;
-        1) echo $(echo "${numbers[0]}" | sed 's/^0*//') ;;
-        *) echo "0" ;;
-    esac
+    # Fallback: match standalone numbers with 2 or more digits (excluding all-zero matches)
+    numbers=($(echo "$filename" | grep -oE '\b[0-9]{2,3}\b' | grep -vE '^0+$'))
+
+    if [ ${#numbers[@]} -eq 1 ]; then
+        echo "${numbers[0]}" | sed 's/^0*//'
+    else
+        echo "0"  # Ambiguous or no match
+    fi
 }
+
 
 get_media_info() {
     local file="$1"
